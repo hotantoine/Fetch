@@ -6,6 +6,8 @@ const { URL } = require("node:url");
 const root = __dirname;
 const port = Number(process.env.PORT || 4273);
 const host = process.env.HOST || (process.env.RENDER ? "0.0.0.0" : "127.0.0.1");
+const appPassword = process.env.APP_PASSWORD || "";
+const creatorCrawlApiKey = process.env.CREATORCRAWL_API_KEY || "";
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -30,6 +32,16 @@ const server = http.createServer(async (request, response) => {
     }
 
     const requestUrl = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+
+    if (!isAuthorized(request)) {
+      response.writeHead(401, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "WWW-Authenticate": 'Basic realm="IG Fetch"',
+        ...corsHeaders(),
+      });
+      response.end("Password required.");
+      return;
+    }
 
     if (requestUrl.pathname === "/api" || requestUrl.pathname === "/api/") {
       response.writeHead(302, { Location: "/", ...corsHeaders() });
@@ -114,6 +126,14 @@ async function profilePayload(profileInput) {
 }
 
 async function fetchPublicProfile(username) {
+  if (creatorCrawlApiKey) {
+    return fetchCreatorCrawlProfile(username);
+  }
+
+  return fetchInstagramPublicProfile(username);
+}
+
+async function fetchInstagramPublicProfile(username) {
   const apiUrl = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`;
   const headers = instagramHeaders(username);
 
@@ -145,6 +165,152 @@ async function fetchPublicProfile(username) {
   }
 
   return extracted;
+}
+
+async function fetchCreatorCrawlProfile(username) {
+  const requests = [
+    creatorCrawlRequest("/api/instagram/profile", { handle: username }),
+    creatorCrawlRequest("/api/instagram/user/posts", { handle: username }),
+  ];
+
+  if (process.env.CREATORCRAWL_INCLUDE_HIGHLIGHTS === "1") {
+    requests.push(creatorCrawlRequest("/api/instagram/user/highlights", { handle: username }));
+  }
+
+  const [profileResult, postsResult, highlightsResult] = await Promise.allSettled(requests);
+
+  if (profileResult.status === "rejected" && postsResult.status === "rejected") {
+    throw new Error(`CreatorCrawl failed: ${profileResult.reason?.message || postsResult.reason?.message || "Could not fetch profile."}`);
+  }
+
+  const profileJson = profileResult.status === "fulfilled" ? profileResult.value : {};
+  const postsJson = postsResult.status === "fulfilled" ? postsResult.value : {};
+  const highlightsJson = highlightsResult?.status === "fulfilled" ? highlightsResult.value : {};
+  const profile = extractCreatorCrawlProfile(profileJson, username);
+  const assets = extractCreatorCrawlAssets(postsJson, profileJson, username, profile.avatarUrl);
+  const highlights = extractCreatorCrawlHighlights(highlightsJson, username);
+
+  if (profile.avatarUrl) {
+    assets.unshift({
+      id: `avatar-${hashString(profile.avatarUrl)}`,
+      kind: "avatar",
+      title: "Profile picture",
+      detail: profile.fullName || `@${username}`,
+      url: profile.avatarUrl,
+      filename: cleanFilename(`${profile.username || username}-profile-picture.jpg`),
+    });
+  }
+
+  return {
+    profile,
+    assets: dedupeAssets(assets),
+    highlights,
+  };
+}
+
+async function creatorCrawlRequest(endpoint, params) {
+  const url = new URL(endpoint, "https://creatorcrawl.com");
+  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+
+  const response = await fetchWithTimeout(
+    url,
+    {
+      headers: {
+        Accept: "application/json",
+        "x-api-key": creatorCrawlApiKey,
+      },
+    },
+    30000,
+  );
+
+  const text = await response.text();
+  let json = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(text || `CreatorCrawl returned HTTP ${response.status}.`);
+  }
+
+  if (!response.ok || json.success === false) {
+    throw new Error(json.message || json.error || `CreatorCrawl returned HTTP ${response.status}.`);
+  }
+
+  return json;
+}
+
+function extractCreatorCrawlProfile(json, username) {
+  const rootData = json?.data || json || {};
+  const user = rootData.user || findObject(rootData, (item) => sameUsername(item?.username, username)) || rootData;
+  const avatarUrl = decodeEntities(
+    firstString(user, ["profile_pic_url_hd", "profile_pic_url", "profilePictureUrl", "profile_picture_url", "avatar_url"]) ||
+      findUrl(rootData, (pathName) => /profile.*pic|avatar/i.test(pathName)) ||
+      "",
+  );
+
+  return {
+    id: String(firstString(user, ["id", "pk", "user_id"]) || ""),
+    username: firstString(user, ["username", "handle"]) || username,
+    fullName: firstString(user, ["full_name", "fullName", "name"]) || username,
+    avatarUrl,
+    biography: firstString(user, ["biography", "bio"]) || "",
+    isPrivate: Boolean(user.is_private || user.isPrivate),
+    source: "CreatorCrawl",
+  };
+}
+
+function extractCreatorCrawlAssets(postsJson, profileJson, username, avatarUrl) {
+  const assets = [];
+  const seen = new Set();
+
+  collectMediaUrls(postsJson || profileJson, (url, pathName, container) => {
+    const decodedUrl = decodeEntities(url);
+    if (!looksLikeInstagramMediaUrl(decodedUrl)) return;
+    if (avatarUrl && decodedUrl === avatarUrl) return;
+    if (seen.has(decodedUrl)) return;
+    if (/\.(mp4|mov)(?:$|\?)/i.test(decodedUrl) || /video/i.test(pathName)) return;
+    if (/profile.*pic|avatar/i.test(pathName)) return;
+
+    seen.add(decodedUrl);
+    const kind = /thumb|thumbnail|cover/i.test(pathName) ? "thumbnail" : "image";
+    const index = assets.length + 1;
+    const shortcode = firstString(container, ["shortcode", "code", "id", "pk"]) || index;
+    const detail = textFromCaption(container) || "Loaded with CreatorCrawl";
+
+    assets.push({
+      id: `${kind}-${hashString(decodedUrl)}-${index}`,
+      kind,
+      title: kind === "thumbnail" ? `Thumbnail ${index}` : `Image ${index}`,
+      detail,
+      url: decodedUrl,
+      filename: cleanFilename(`${username}-${shortcode}-${kind}-${index}.jpg`),
+    });
+  });
+
+  return assets;
+}
+
+function extractCreatorCrawlHighlights(json, username) {
+  const highlights = [];
+  const seen = new Set();
+
+  collectMediaUrls(json, (url, pathName, container) => {
+    const decodedUrl = decodeEntities(url);
+    if (!looksLikeInstagramMediaUrl(decodedUrl)) return;
+    if (seen.has(decodedUrl)) return;
+    if (!/highlight|cover|thumb|thumbnail/i.test(pathName)) return;
+
+    seen.add(decodedUrl);
+    const title = firstString(container, ["title", "name"]) || `Story ${highlights.length + 1}`;
+    highlights.push({
+      id: String(firstString(container, ["id", "pk"]) || `highlight-${hashString(decodedUrl)}`),
+      title,
+      url: decodedUrl,
+      previewUrl: decodedUrl,
+      filename: cleanFilename(`${username}-story-cover-${title}.jpg`),
+    });
+  });
+
+  return highlights;
 }
 
 function extractFromWebProfileJson(json, username) {
@@ -451,13 +617,22 @@ function validUsername(username) {
 }
 
 function instagramHeaders(username) {
-  return {
+  const headers = {
     Accept: "application/json, text/plain, */*",
     "User-Agent":
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
     Referer: `https://www.instagram.com/${username}/`,
     "X-IG-App-ID": "936619743392459",
   };
+
+  const cookie = process.env.IG_COOKIE || process.env.INSTAGRAM_COOKIE || "";
+  if (cookie) {
+    headers.Cookie = cookie;
+    const csrf = cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    if (csrf?.[1]) headers["X-CSRFToken"] = csrf[1];
+  }
+
+  return headers;
 }
 
 async function fetchWithTimeout(url, options, ms) {
@@ -511,6 +686,81 @@ function decodeEntities(value) {
     .replace(/&#39;/g, "'");
 }
 
+function firstString(source, keys) {
+  if (!source || typeof source !== "object") return "";
+
+  for (const key of keys) {
+    const parts = key.split(".");
+    let value = source;
+    for (const part of parts) {
+      value = value?.[part];
+    }
+    if (typeof value === "string" && value.trim()) return value;
+    if (typeof value === "number") return String(value);
+  }
+
+  return "";
+}
+
+function sameUsername(value, username) {
+  return String(value || "").replace(/^@/, "").toLowerCase() === username.toLowerCase();
+}
+
+function findObject(source, predicate) {
+  const seen = new Set();
+
+  function visit(value) {
+    if (!value || typeof value !== "object" || seen.has(value)) return null;
+    seen.add(value);
+    if (predicate(value)) return value;
+
+    for (const child of Object.values(value)) {
+      const found = visit(child);
+      if (found) return found;
+    }
+
+    return null;
+  }
+
+  return visit(source);
+}
+
+function findUrl(source, predicate) {
+  let found = "";
+  collectMediaUrls(source, (url, pathName) => {
+    if (!found && predicate(pathName)) found = url;
+  });
+  return found;
+}
+
+function collectMediaUrls(source, onUrl) {
+  const seen = new Set();
+
+  function visit(value, pathParts = [], container = null) {
+    if (!value) return;
+
+    if (typeof value === "string") {
+      if (/^https?:\/\//i.test(value)) {
+        onUrl(value, pathParts.join("."), container);
+      }
+      return;
+    }
+
+    if (typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+
+    const nextContainer = Array.isArray(value) ? container : value;
+    Object.entries(value).forEach(([key, child]) => visit(child, [...pathParts, key], nextContainer));
+  }
+
+  visit(source);
+}
+
+function textFromCaption(source) {
+  const caption = firstString(source, ["caption.text", "caption", "accessibility_caption", "description", "title"]);
+  return caption.length > 140 ? `${caption.slice(0, 137)}...` : caption;
+}
+
 function cleanFilename(value) {
   const filename = String(value)
     .trim()
@@ -548,8 +798,23 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
   };
+}
+
+function isAuthorized(request) {
+  if (!appPassword) return true;
+
+  const authorization = request.headers.authorization || "";
+  if (!authorization.startsWith("Basic ")) return false;
+
+  try {
+    const decoded = Buffer.from(authorization.slice(6), "base64").toString("utf8");
+    const password = decoded.split(":").slice(1).join(":");
+    return password === appPassword;
+  } catch {
+    return false;
+  }
 }
 
 function logRequest(request, requestUrl, ms) {
