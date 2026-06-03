@@ -173,7 +173,7 @@ async function fetchCreatorCrawlProfile(username) {
     creatorCrawlRequest("/api/instagram/user/posts", { handle: username }),
   ];
 
-  if (process.env.CREATORCRAWL_INCLUDE_HIGHLIGHTS === "1") {
+  if (process.env.CREATORCRAWL_INCLUDE_HIGHLIGHTS !== "0") {
     requests.push(creatorCrawlRequest("/api/instagram/user/highlights", { handle: username }));
   }
 
