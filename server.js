@@ -20,6 +20,8 @@ const mimeTypes = {
 };
 
 const server = http.createServer(async (request, response) => {
+  const startedAt = Date.now();
+
   try {
     if (request.method === "OPTIONS") {
       response.writeHead(204, corsHeaders());
@@ -37,21 +39,26 @@ const server = http.createServer(async (request, response) => {
 
     if (requestUrl.pathname === "/api/profile") {
       await handleProfile(requestUrl, response);
+      logRequest(request, requestUrl, Date.now() - startedAt);
       return;
     }
 
     if (requestUrl.pathname === "/api/image") {
       await handleMediaProxy(requestUrl, response, false);
+      logRequest(request, requestUrl, Date.now() - startedAt);
       return;
     }
 
     if (requestUrl.pathname === "/api/download") {
       await handleMediaProxy(requestUrl, response, true);
+      logRequest(request, requestUrl, Date.now() - startedAt);
       return;
     }
 
     serveStatic(requestUrl, response);
+    logRequest(request, requestUrl, Date.now() - startedAt);
   } catch (error) {
+    console.error(`${request.method} ${request.url} failed:`, error);
     sendJson(response, 500, {
       message: error.message || "Unexpected server error.",
     });
@@ -543,4 +550,8 @@ function corsHeaders() {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   };
+}
+
+function logRequest(request, requestUrl, ms) {
+  console.log(`${request.method} ${requestUrl.pathname} finished in ${ms}ms`);
 }

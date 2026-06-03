@@ -55,8 +55,9 @@ els.profileForm.addEventListener("submit", async (event) => {
     );
 
     loadProfile(data);
-  } catch {
-    setStatus(apiBase ? "Open IG Fetch.command, leave Terminal open, then try again." : "Load failed.", "error");
+  } catch (error) {
+    const fallback = apiBase ? "Open IG Fetch.command, leave Terminal open, then try again." : "Load failed.";
+    setStatus(error.message || fallback, "error");
   }
 });
 
@@ -299,10 +300,19 @@ function setStatus(text, type = "") {
 
 function requestJson(url, ms) {
   return fetchWithTimeout(url, ms).then(async (response) => {
-    const data = await response.json();
+    const data = await readJsonResponse(response);
     if (!response.ok || data.ok === false) throw new Error(data.message || "Could not fetch.");
     return data;
   });
+}
+
+async function readJsonResponse(response) {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(text || `Request failed with HTTP ${response.status}.`);
+  }
 }
 
 function fetchWithTimeout(url, ms) {
