@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IG Fetch</title>
+    <link rel="stylesheet" href="./styles.css?v=8" />
+  </head>
+  <body>
+    <header class="topbar" aria-label="App header">
+      <a class="brand" href="./index.html" aria-label="IG Fetch home">
+        <span class="brand-mark">IG</span>
+        <strong>Fetch</strong>
+      </a>
+    </header>
+
+    <main class="layout">
+      <section class="workspace" aria-label="Fetch media">
+        <form id="profileForm" class="searchbar">
+          <label class="field">
+            <span class="visually-hidden">Username or URL</span>
+            <input
+              id="profileInput"
+              autocomplete="off"
+              spellcheck="false"
+              autofocus
+              placeholder="@username or URL"
+            />
+          </label>
+          <button class="primary" type="submit">Fetch</button>
+        </form>
+      </section>
+
+      <section class="results" aria-live="polite">
+        <div class="result-head">
+          <h2 id="resultTitle">Ready</h2>
+        </div>
+
+        <div id="status" class="status" role="status" hidden></div>
+
+        <section id="accountDetails" class="account-details" hidden>
+          <button id="accountCopyButton" class="copy-card" type="button" aria-label="Copy account name">
+            <span class="copy-icon" aria-hidden="true"></span>
+            <span class="copy-content">
+              <strong id="accountName"></strong>
+              <small>Copy</small>
+            </span>
+          </button>
+
+          <div id="paletteCard" class="palette-card" hidden>
+            <span class="section-label">Colours</span>
+            <div id="paletteGrid" class="palette-grid" aria-label="Logo colours"></div>
+          </div>
+        </section>
+
+        <section id="highlightSection" class="highlight-section" hidden>
+          <span class="section-label">Stories</span>
+          <div id="highlightRail" class="highlight-rail" aria-label="Story cover images"></div>
+        </section>
+
+        <div class="toolbar" hidden>
+          <div class="filters" aria-label="Filter results">
+            <button type="button" class="filter is-active" data-filter="all">All</button>
+            <button type="button" class="filter" data-filter="avatar">Avatar</button>
+            <button type="button" class="filter" data-filter="image">Images</button>
+            <button type="button" class="filter" data-filter="thumbnail">Thumbs</button>
+          </div>
+          <div class="bulk-actions">
+            <button id="selectAllButton" class="secondary" type="button">Select all</button>
+            <button id="clearButton" class="secondary" type="button">Clear</button>
+            <button id="downloadSelectedButton" class="primary" type="button" disabled>Download</button>
+          </div>
+        </div>
+
+        <div id="assetGrid" class="asset-grid" aria-label="Media results"></div>
+      </section>
+    </main>
+
+    <template id="assetCardTemplate">
+      <article class="asset-card">
+        <label class="select-box">
+          <input type="checkbox" />
+          <span>Select</span>
+        </label>
+        <figure class="preview">
+          <img alt="" loading="lazy" />
+        </figure>
+        <div class="asset-meta">
+          <div>
+            <span class="badge"></span>
+            <h3></h3>
+          </div>
+          <p></p>
+        </div>
+        <div class="card-actions">
+          <a class="primary download-link">Download</a>
+        </div>
+      </article>
+    </template>
+
+    <script src="./app.js?v=8" defer></script>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "ig-fetch",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A small web tool for fetching public Instagram profile media.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

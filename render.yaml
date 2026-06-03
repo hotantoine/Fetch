@@ -1,0 +1,12 @@
+services:
+  - type: web
+    runtime: node
+    name: ig-fetch
+    plan: free
+    buildCommand: "npm install"
+    startCommand: "npm start"
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: HOST
+        value: "0.0.0.0"
